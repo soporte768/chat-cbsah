@@ -1,0 +1,5 @@
+streamlit
+langchain-community
+langchain-groq
+pymysql
+sqlalchemy
