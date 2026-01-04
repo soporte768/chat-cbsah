@@ -5,31 +5,34 @@ from langchain_groq import ChatGroq
 import urllib.parse
 
 # 1. CONFIGURACIÓN
-st.set_page_config(page_title="IA Intranet CBSAH", page_icon="⚡")
-st.title("⚡ Chat CBSAH (Llama 3.3)")
-st.markdown("Usando el nuevo modelo Llama 3.3 (El más potente y gratis).")
+st.set_page_config(page_title="IA Intranet", page_icon="⚡")
+st.title("⚡ Chat CBSAH")
 
-# 2. ENTRADA DE CLAVE
-api_key = st.sidebar.text_input("Pega tu Groq API Key (gsk_...):", type="password")
+# 2. OBTENER CLAVES SECRETAS (Automático)
+try:
+    # Leemos las claves de la "Caja Fuerte" de Streamlit
+    api_key = st.secrets["GROQ_API_KEY"]
+    db_host = st.secrets["DB_HOST"]
+    db_user = st.secrets["DB_USER"]
+    db_pass = st.secrets["DB_PASSWORD"]
+    db_name = st.secrets["DB_NAME"]
+except Exception:
+    st.error("❌ Error: No se encontraron los secretos. Configúralos en Streamlit Cloud.")
+    st.stop()
 
-# 3. DATOS DE CONEXIÓN
-db_host = '51.79.9.184'
-db_user = 'intranet_cbsah'
-db_pass_raw = 'cbsah3202@'
-db_name = 'intranet_cbsah'
-db_password = urllib.parse.quote_plus(db_pass_raw)
-
-# 4. LÓGICA DEL CHAT
+# 3. CONEXIÓN Y CHAT
 if api_key:
     try:
-        db_uri = f"mysql+pymysql://{db_user}:{db_password}@{db_host}/{db_name}"
+        # Codificar contraseña por seguridad
+        password_encoded = urllib.parse.quote_plus(db_pass)
+        db_uri = f"mysql+pymysql://{db_user}:{password_encoded}@{db_host}/{db_name}"
         db = SQLDatabase.from_uri(db_uri)
         
-        # --- ACTUALIZACIÓN: USAMOS EL NUEVO LLAMA 3.3 ---
+        # Usamos Llama 3.3
         llm = ChatGroq(
             temperature=0, 
             groq_api_key=api_key, 
-            model_name="llama-3.3-70b-versatile" # <--- ESTE ES EL NUEVO NOMBRE CORRECTO
+            model_name="llama-3.3-70b-versatile"
         )
 
         agent_executor = create_sql_agent(
@@ -40,8 +43,9 @@ if api_key:
             handle_parsing_errors=True
         )
         
-        st.success("✅ Conectado a Llama 3.3")
+        st.success("✅ Conectado y Listo")
 
+        # Historial de mensajes
         if "messages" not in st.session_state:
             st.session_state.messages = []
 
@@ -49,13 +53,14 @@ if api_key:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
 
-        if prompt := st.chat_input("Ej: ¿Cuántos alumnos hay en total?"):
+        # Caja de entrada
+        if prompt := st.chat_input("Consulta tu base de datos aquí..."):
             st.session_state.messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"):
                 st.markdown(prompt)
 
             with st.chat_message("assistant"):
-                with st.spinner("Analizando..."):
+                with st.spinner("Procesando..."):
                     try:
                         response = agent_executor.invoke(prompt)
                         st.markdown(response["output"])
@@ -65,6 +70,3 @@ if api_key:
 
     except Exception as e:
         st.error(f"❌ Error de conexión: {e}")
-
-else:
-    st.warning("👈 Pega tu clave de Groq en el menú lateral.")
