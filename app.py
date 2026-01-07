@@ -1,4 +1,6 @@
 import streamlit as st
+import pandas as pd
+import io
 from langchain_community.utilities import SQLDatabase
 from langchain_community.agent_toolkits import create_sql_agent
 from langchain_openai import ChatOpenAI
@@ -7,100 +9,169 @@ import urllib.parse
 # ==========================================
 # 1. CONFIGURACIÓN
 # ==========================================
-st.set_page_config(page_title="IA CBSAH", page_icon="🎓", layout="wide")
+st.set_page_config(page_title="IA Analista CBSAH", page_icon="🚀", layout="centered")
 
-# --- LEER SECRETOS ---
 try:
-    openai_key = st.secrets["OPENAI_API_KEY"]
-    db_host = st.secrets["DB_HOST"]
-    db_user = st.secrets["DB_USER"]
-    db_pass = st.secrets["DB_PASSWORD"]
-    db_name = st.secrets["DB_NAME"]
-except:
-    st.error("❌ Error: Faltan configurar los secretos (API Key o Base de Datos).")
+    # Ahora esta clave es la de OPENROUTER
+    OPENROUTER_API_KEY = st.secrets["OPENAI_API_KEY"] 
+    DB_HOST = st.secrets["DB_HOST"]
+    DB_USER = st.secrets["DB_USER"]
+    DB_PASSWORD = st.secrets["DB_PASSWORD"]
+    DB_NAME = st.secrets["DB_NAME"]
+except Exception:
+    st.error("🚨 Error: Faltan credenciales en secrets.toml")
     st.stop()
 
 # ==========================================
-# 2. CAPTURA DE USUARIO (Arreglado)
+# 2. CONTEXTO
 # ==========================================
 query_params = st.query_params
-# Decodificamos el nombre para quitar %20 y símbolos raros
 usuario_raw = query_params.get("usuario", "Usuario")
 usuario_actual = urllib.parse.unquote(usuario_raw).replace('+', ' ')
-anio_actual = query_params.get("anio", "2026")
 
-st.markdown(f"### 👋 Hola, **{usuario_actual}**")
-st.caption(f"Conectado a Intranet CBSAH | Año Académico: **{anio_actual}**")
+st.markdown(f"### 🚀 Analista Potente (DeepSeek): **{usuario_actual}**")
+st.caption("🤖 Cerebro: **DeepSeek-V3** (Más inteligente, mismo precio)")
 
 # ==========================================
-# 3. EL CEREBRO (Instrucciones GPT-4o)
+# 3. TABLAS CLAVE
 # ==========================================
-instrucciones = f"""
-Eres un asistente administrativo experto del Colegio CBSAH.
-Tu objetivo es consultar la base de datos MySQL y responder en español chileno formal.
+tablas_gestion_escolar = [
+    "alumnos", "alumnos_informacion_adicional", "alumnos_pie",
+    "cursos", "asignaturas", "curso_asignatura", "notas", "evaluaciones",
+    "anotaciones_convivencia", "atrasos_alumnos", 
+    "inasistencias", "medidas_disciplinarias", 
+    "funcionarios", "atrasos_funcionarios"
+]
 
-REGLAS OBLIGATORIAS:
-1. **FILTRO DE AÑO:** SIEMPRE, sin excepción, filtra tus consultas por `ano_escolar = {anio_actual}`.
-2. **TABLA 'funcionarios':**
-   - El nombre completo está en la columna `nombre` (Ej: 'Ignacio Luis...').
-   - El cargo está en la columna `funcion` (Ej: 'DOCENTE', 'ASISTENTE').
-   - El rut está en `rut`.
-3. **TABLA 'alumnos' (si te preguntan):**
-   - Usa `activo = 1` para alumnos vigentes.
-   - Relaciona con tabla `cursos` si piden el grado.
-4. **FORMATO:**
-   - Si piden listas, usa una tabla Markdown bien ordenada.
-   - Si no hay datos, di: "No encontré registros para el año {anio_actual}".
+# ==========================================
+# 4. CEREBRO IA (CONFIGURADO PARA DEEPSEEK)
+# ==========================================
+instrucciones_sistema = """
+Eres un experto DBA y Científico de Datos del colegio CBSAH.
+Responde de forma concisa y profesional.
+
+🕵️ **ESTRATEGIA DE NOMBRES:**
+Si buscan "Juan Perez", DIVIDE LA BÚSQUEDA:
+`WHERE nombres LIKE '%Juan%' AND apellido_paterno LIKE '%Perez%'`
+(Nunca busques el nombre completo junto en una sola columna).
+
+🗺️ **REGLAS SQL OBLIGATORIAS:**
+1. **AÑO:** Si no especifican año, asume el año escolar vigente.
+2. **RELACIONES:**
+   - `alumnos` <-> `cursos`: `ON alumnos.curso_id = cursos.id`
+   - `atrasos_funcionarios` <-> `funcionarios`: `ON atrasos_funcionarios.funcionario_rut = funcionarios.rut`
+   - `notas` <-> `asignaturas`: `ON notas.id_asignatura = asignaturas.id`
+
+🎯 **COMPORTAMIENTO:**
+1. **DATO ÚNICO:** Responde solo con texto plano.
+2. **LISTAS/TABLAS:** Entrega una **TABLA MARKDOWN**.
+
+📊 **FORMATO DE TABLA:**
+| Columna 1 | Columna 2 |
+|-----------|-----------|
+| Dato A    | Dato B    |
 """
 
 # ==========================================
-# 4. CONEXIÓN Y CHAT
+# 5. FUNCIONES VISUALES (EXCEL Y GRÁFICOS)
 # ==========================================
-if openai_key:
+def generar_excel(df):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Datos_IA')
+    return output.getvalue()
+
+def intentar_graficar(texto_respuesta, prompt_usuario):
     try:
-        # Conexión a Base de Datos
-        password_encoded = urllib.parse.quote_plus(db_pass)
-        db_uri = f"mysql+pymysql://{db_user}:{password_encoded}@{db_host}/{db_name}"
-        db = SQLDatabase.from_uri(db_uri)
-        
-        # --- USAMOS GPT-4o-mini (El mejor calidad/precio) ---
-        llm = ChatOpenAI(
-            temperature=0,
-            model="gpt-4o-mini", 
-            api_key=openai_key
-        )
-
-        agent_executor = create_sql_agent(
-            llm=llm,
-            db=db,
-            agent_type="openai-tools", # GPT usa herramientas nativas, es muy preciso
-            verbose=True,
-            handle_parsing_errors=True,
-            prefix=instrucciones
-        )
-
-        # Interfaz de Chat
-        if "messages" not in st.session_state:
-            st.session_state.messages = []
-
-        for message in st.session_state.messages:
-            with st.chat_message(message["role"]):
-                st.markdown(message["content"])
-
-        if prompt := st.chat_input("Ej: Dame la lista de docentes activos..."):
-            st.session_state.messages.append({"role": "user", "content": prompt})
-            with st.chat_message("user"):
-                st.markdown(prompt)
+        if "|" in texto_respuesta and "---" in texto_respuesta:
+            lineas = texto_respuesta.split('\n')
+            tabla_lineas = [linea for linea in lineas if "|" in linea]
+            tabla_limpia = "\n".join(tabla_lineas)
             
-            with st.chat_message("assistant"):
-                with st.spinner("Consultando..."):
-                    try:
-                        response = agent_executor.invoke(prompt)
-                        st.markdown(response["output"])
-                        st.session_state.messages.append({"role": "assistant", "content": response["output"]})
-                    except Exception as e:
-                        st.error("Ocurrió un error al procesar tu consulta.")
-                        print(e) 
+            df = pd.read_csv(io.StringIO(tabla_limpia), sep="|", skipinitialspace=True)
+            df = df.dropna(axis=1, how='all')
+            df.columns = df.columns.str.strip()
+            
+            if not df.empty and len(df) > 0:
+                palabras_grafico = ["gráfico", "grafico", "barras", "lineas", "evolucion", "torta", "visualizar"]
+                pide_grafico = any(p in prompt_usuario.lower() for p in palabras_grafico)
+                
+                cols_num = df.select_dtypes(include=['float', 'int']).columns
+                cols_str = df.select_dtypes(include=['object']).columns
+                
+                if pide_grafico and len(cols_num) > 0:
+                    st.success("📊 Visualización Generada")
+                    tab_graf, tab_datos = st.tabs(["📈 Gráfico", "📄 Datos y Descarga"])
+                    with tab_graf:
+                        if len(cols_str) > 0:
+                            st.bar_chart(df.set_index(cols_str[0])[cols_num[0]])
+                        else:
+                            st.line_chart(df)
+                    with tab_datos:
+                        st.dataframe(df)
+                        excel_data = generar_excel(df)
+                        st.download_button("📥 Descargar Excel (.xlsx)", excel_data, "reporte.xlsx")
+                else:
+                    with st.expander("📂 Ver Tabla de Datos y Descargar Excel"):
+                        st.dataframe(df)
+                        excel_data = generar_excel(df)
+                        st.download_button("📥 Descargar Excel (.xlsx)", excel_data, "reporte.xlsx")
+    except Exception:
+        pass
 
-    except Exception as e:
-        st.error(f"Error de conexión: {e}")
+# ==========================================
+# 6. EJECUCIÓN
+# ==========================================
+if "messages" not in st.session_state:
+    st.session_state.messages = [{"role": "assistant", "content": "Hola. Estoy potenciado con DeepSeek. ¿Qué analizamos hoy?"}]
+
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+if prompt := st.chat_input("Ej: Atrasos de Juan Perez, Lista del 1° A..."):
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    with st.chat_message("assistant"):
+        with st.spinner("Pensando con DeepSeek..."):
+            try:
+                password_encoded = urllib.parse.quote_plus(DB_PASSWORD)
+                db_uri = f"mysql+pymysql://{DB_USER}:{password_encoded}@{DB_HOST}/{DB_NAME}"
+                
+                db = SQLDatabase.from_uri(
+                    db_uri,
+                    sample_rows_in_table_info=2,
+                    include_tables=tablas_gestion_escolar
+                )
+
+                # --- AQUÍ ESTÁ EL CAMBIO DE POTENCIA ---
+                # Usamos OpenRouter para acceder a DeepSeek
+                llm = ChatOpenAI(
+                    temperature=0,
+                    model="deepseek/deepseek-chat", # Este es el modelo potente y barato
+                    api_key=OPENROUTER_API_KEY,
+                    base_url="https://openrouter.ai/api/v1" # Redireccionamos a OpenRouter
+                )
+
+                agent_executor = create_sql_agent(
+                    llm=llm,
+                    db=db,
+                    agent_type="openai-tools",
+                    verbose=True,
+                    handle_parsing_errors=True,
+                    prefix=instrucciones_sistema
+                )
+
+                response = agent_executor.invoke(prompt)
+                output_text = response["output"]
+                
+                st.markdown(output_text)
+                st.session_state.messages.append({"role": "assistant", "content": output_text})
+                
+                intentar_graficar(output_text, prompt)
+
+            except Exception as e:
+                st.error("Error técnico o de conexión.")
+                # st.error(f"Detalle: {e}")
